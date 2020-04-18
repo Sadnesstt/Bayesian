@@ -1,0 +1,745 @@
+---
+title: "Bayesian_hw4"
+author: "192STG11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+pacman::p_load(ggplot2, tidyverse, dplyr, plotly, processx, coda)
+rm(list=ls(all=TRUE))
+setwd('C:/Users/dnskd/Desktop/20Spring/Bayesian/week4/hw')
+```
+
+# ch4 본문 프로그램 실습 코드
+
+## 4.1.1 선형회귀모형 분석
+```{r linear regression}
+rmvnorm <- function(n, mu, Sig){
+  p = length(mu)
+  R = chol(Sig) # R%*%t(R) = Sigma 만족하는 unique upper triangle 찾아줌
+  z = matrix(rnorm(n*p), n, p)
+  tt = z%*%R + matrix(mu, n, p, byrow = T)
+}
+
+dat = read.csv('../immigrants.csv')
+y = dat$wage
+n = length(y)
+X = cbind(rep(1, n), dat$sp, dat$lit)
+p = ncol(X)
+
+# sigma^2의 사전모수
+a = 1
+b = 1
+XtX = t(X) %*% X
+XtX.inv = solve(XtX)
+Xty = t(X)%*%y
+beta.hat = beta_lse = as.vector(XtX%*%Xty)
+sigsq.hat = sum((y-X%*%beta_lse)^2)/(n-p)
+beta0 = beta_lse
+Sig0 = diag(diag(XtX.inv))*sigsq.hat*100
+Sig0.inv = solve(Sig0)
+
+N = 10000; nburn = 1000
+sigsq.samples = rep(0, N)
+beta.samples = matrix(0, N, p)
+
+beta.init = beta_lse
+sigsq.init = sigsq.hat
+beta = beta.init; sigsq = sigsq.hat
+
+# start Gibbs Sampling
+for(iter in 1:(N + nburn)){
+  Sig.beta = solve(Sig0.inv + XtX/sigsq)
+  mu.beta = Sig.beta %*% (Sig0.inv %*% beta0 + 1/sigsq*Xty)
+  beta = as.vector(rmvnorm(1, mu.beta, Sig.beta))
+  
+  SSR = sum((y - X%*%beta)^2)
+  sigsq = 1/rgamma(1, n/2 + a, 1/2*SSR + b)
+  
+  if(iter > nburn){
+    beta.samples[iter-nburn, ] = beta
+    sigsq.samples[iter-nburn] = sigsq
+  }
+
+}
+
+#### 95% HPD interval ####
+(ci_beta = round(apply(beta.samples, 2, quantile, probs = c(0.025, 0.975)), 4))
+(ci_sigsq = round(quantile(sigsq.samples, c(0.025, 0.975)), 4))
+
+#### Figure 4.1 예 4.1 모수에 대한 경로그림 및 자기상관 ####
+par(mfrow = c(2,2))
+for(i in 1:3) plot(beta.samples[,i], type = "l", xlab = paste0("beta_", i), ylab = "", col = "blue")
+plot(sigsq.samples, xlab = "sigsq", ylab = "", type = 'l', col= 'blue')
+
+#### Figure 4.2 예 4.1 사후밀도함수와 95% HPD 구간 ####
+par(mfrow = c(2, 2))
+for(i in 1:3){
+  plot(density(beta.samples[,i]), type = 'l', main = "", xlab = paste0("beta_", i))
+  abline(v = ci_beta[,i], col = 2, lty = 2)
+}
+
+plot(density(sigsq.samples), main = "", xlab = "sigsq", type = "l")
+abline(v = ci_sigsq, col = 2, lty = 2)
+
+```
+
+## 4.1.2 제한된 다변량 정규분포로부터의 표본추출
+```{r truncnorm, warning=FALSE}
+library(truncnorm)
+
+k = 5
+mu = c(0, 1, 2, 3, 5)
+Sig = matrix(0.7, k, k) + diag(k)*0.3
+A = solve(Sig)
+
+m = 1000
+N = 10000
+theta.init = c(0, 1, 2, 3, 4) ## 제한 조건을 만족하는 초기치 선택
+theta.samples = matrix(0, N, k)
+theta = theta.init
+for(iter in 1:(m+N)){
+  for(i in 1:k){
+    vec.Ai = A[, -i]
+    vec.mi = (theta-mu)[-i]
+    cond.mean = mu[i] - 1/A[i,i] * vec.Ai %*% vec.mi
+    cond.sd = 1/sqrt(A[i,i])
+    a = ifelse(i == 1, -Inf, theta[i-1])
+    b = ifelse(i == k, Inf, theta[i+1])
+    theta[i] = rtruncnorm(1, as.double(a), as.double(b), cond.mean, cond.sd)
+    
+  }
+  if(iter>m) theta.samples[iter-m, ] = theta
+}
+
+
+#### Figure 4.3 예 4.2 모수산점도 ####
+par(mfrow = c(2,2))
+plot(theta.samples[, c(1,2)], xlab = "theta1", ylab = "theta2", col = "blue")
+lines(theta.samples[,1], theta.samples[,1], type = 'l')
+plot(theta.samples[, c(2, 3)], xlab = "theta2", ylab = "theta3", col = "blue")
+lines(theta.samples[,2], theta.samples[,2], type = 'l')
+plot(theta.samples[, c(3, 4)], xlab = "theta3", ylab = "theta4", col = "blue")
+lines(theta.samples[,3], theta.samples[,3], type = 'l')
+plot(theta.samples[, c(4, 5)], xlab = "theta4", ylab = "theta5", col = "blue")
+lines(theta.samples[,4], theta.samples[,4], type = 'l')
+
+#### Figure 4.4 예 4.2 모수의 사후밀도 ####
+plot(density(theta.samples[,1]), xlab = "theta1", main = "")
+plot(density(theta.samples[,2]), xlab = "theta1", main = "")
+plot(density(theta.samples[,3]), xlab = "theta1", main = "")
+plot(density(theta.samples[,4]), xlab = "theta1", main = "")
+
+```
+
+## 4.2 매트로폴리스-해스팅스
+```{r MH}
+#1)입력 및 준비단계 a) 데이터와 사전모수 입력
+mu0=10 ; sigsq0=25 ; a=0.5 ; b=1
+x<-c(10,13,15,11,9,18,20,17,23,21)
+dataList=list(x=x,mu0=mu0,sigsq0=sigsq0,a=a,b=b)
+
+#사후밀도함수의 커널을 계산. 메트로폴리스해스팅스에서 상수항은 약분되기 때문에 함수부분만 계산해도 됨
+
+#1)입력 및 준비단계 b) 사후밀도함수의 커널을 계산하는 함수 작성
+###compute posterior kernel for Metropolis
+post.normal_mu_sigsq=function(theta,dataList){
+  # retrieve data from dataList
+  x=dataList$x
+  mu=dataList$mu0
+  sigsq0=dataList$sigsq0
+  a=dataList$a
+  b=dataList$b
+  
+  mu=theta[1] ; sigsq=theta[2]
+  f=exp(-0.5*length(x)*log(sigsq)-0.5*sum((x-mu)^2)/sigsq-0.5*(mu-mu0)^2/sigsq0-(a+1)*log(sigsq)-b/sigsq)
+  return(f)
+}
+
+#2) MCMC 표본추출함수 작성
+###random walk metropolis algorithm
+Metropolis_normal_mu_sigsq=function(nsim,nburn,delta,dataList,initsList){
+  #initial values of mu and log.sigsq
+  mu=initsList$mu
+  log.sigsq=log(initsList$sigsq)
+  theta.curr=c(mu,log.sigsq)
+  p=length(theta.curr)
+  
+  #Start iterations
+  para.samples=matrix(0,nsim,p)
+  for (iter in 1:(nsim+nburn)){
+    z=rnorm(p,0,1)
+    theta.prop=z*delta+theta.curr
+    mu.curr=theta.curr[1]
+    sigsq.curr=exp(theta.curr[2])
+    mu.prop=theta.prop[1]
+    sigsq.prop=exp(theta.prop[2])
+    alpha=post.normal_mu_sigsq(c(mu.prop,sigsq.prop),dataList)/post.normal_mu_sigsq(c(mu.curr,sigsq.curr),dataList)*sigsq.prop/sigsq.curr
+    if(runif(1)<alpha) {theta.next<-theta.prop} else theta.next<-theta.curr
+    
+    theta.curr=theta.next
+    if(iter>nburn) para.samples[iter-nburn,]=c(theta.next[1],exp(theta.next[2]))
+
+  }
+  #end iterations
+  return(para.samples)
+}
+
+#3)다중체인 mcmc a)MCMC 준비단계 이후의 반복수, 다중체인의 수 선택
+nChains=3
+nsim=20000 ; nburn=5000
+p=2 # num of para
+mcmc.samples=array(0,dim=c(nsim,p,nChains)) # array to save samples
+
+#3)다중체인 mcmc b) 랜덤워크의 표준편차 delta 선택
+#delta는 여러 가지 값 가능
+delta=1
+
+#3)다중체인 mcmc c) 초기치 선택
+##Generate random initial values
+inits.random=function(x){
+  resampledX=sample(x,replace=T)
+  muInit=mean(resampledX)
+  sigsqInit=var(resampledX)
+  return(list(mu=muInit,sigsq=sigsqInit))
+}
+
+##start iteration
+for (ich in 1:nChains){
+  initsList=inits.random(x)
+  mcmc.samples[,,ich]=Metropolis_normal_mu_sigsq(nsim,nburn,delta,dataList,initsList)
+}
+
+#4)수렴진단
+###Figure 4.5 ; mu와 sigma의 경로그림과 사후밀도함수
+mu.samples=mcmc.samples[,1,]
+sigsq.samples=mcmc.samples[,2,]
+
+par(mfrow = c(2,2))
+plot(mu.samples[,1],type="l",xlab="iteration",ylab=quote(mu))
+lines(mu.samples[,2],col=2)
+lines(mu.samples[,3],col=3)
+
+plot(density(mu.samples[,1]),xlab=quote(mu),ylab="posterior density",main="")
+lines(density(mu.samples[,2]),col=2)
+lines(density(mu.samples[,3]),col=3)
+
+plot(sigsq.samples[,1],type="l",xlab="iteration",ylab=quote(sigma^2))
+lines(sigsq.samples[,2],col=2)
+lines(sigsq.samples[,3],col=3)
+
+plot(density(sigsq.samples[,1]),xlab=quote(sigma^2),ylab="posterior density",main="")
+lines(density(sigsq.samples[,2]),col=2)
+lines(density(sigsq.samples[,3]),col=3)
+
+# Gelman 상수
+library(coda)
+
+samples.1 = mcmc(mcmc.samples[,,1])
+samples.2 = mcmc(mcmc.samples[,,2])
+samples.3 = mcmc(mcmc.samples[,,3])
+
+codaSamples = mcmc.list(list(samples.1, samples.2, samples.3))
+gelman = gelman.diag(codaSamples)
+gelman
+
+Metro.draws = mcmc(mcmc.samples[,,1])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+# 5) 베이지안 사후추론
+#### Posterior inference ####
+mcmc.samples.combined = rbind(mcmc.samples[,,1], mcmc.samples[,,2], mcmc.samples[,,3])
+para.hat = apply(mcmc.samples.combined, 2, mean)
+HPD = apply(mcmc.samples.combined, 2, function(x) quantile(x, c(0.025, 0.975)))
+
+#### Figure 4.6 예 4.3에서 mu와 sigma의 주변 사후밀도함수와 95% HPD 구간 ####
+par(mfrow = c(1,2))
+plot(density(mcmc.samples.combined[,1]), xlab = quote(mu), ylab = "", main = "")
+abline(v = HPD[,1], lty = 2, col = 2)
+plot(density(mcmc.samples.combined[,2]), xlab = quote(sigma^2), ylab = "", main = "")
+abline(v = HPD[,2], lty = 2, col = 2)
+```
+
+```{r delta}
+# 1. delta = 0.3
+#### MCMC Simulation ####
+nChains = 3
+nsim <- 2000; nburn <- 0; delta <- 0.3
+p = 2
+mcmc.samples = array(0, dim=c(nsim, p, nChains))
+for(ich in 1:nChains){
+  initsList = inits.random(x)
+  mcmc.samples[,,ich] = Metropolis_normal_mu_sigsq(nsim, nburn, delta, dataList, initsList)
+}
+Metro.draws = mcmc(mcmc.samples[,,1])
+accept.rate = 1 - rejectionRate(Metro.draws); accept.rate
+
+mu.samples = mcmc.samples[,1,]
+sigsq.samples = mcmc.samples[,2,]
+
+#### Figure 4.7 예 4.3에서 경로그림과 사후밀도함수 ####
+par(mfrow = c(2,2))
+plot(mu.samples[,1], type = 'l', xlab = "iteration", ylab = quote(mu), main = paste0("accept.rate=", round(accept.rate[1],3)))
+lines(mu.samples[,2], col = 2)
+lines(mu.samples[,3], col = 3)
+
+plot(density(mu.samples[,1]), type = 'l', xlab = quote(mu), ylab = "posterior density", main = paste0("delta = ", round(delta, 2)))
+lines(density(mu.samples[,2]), col = 2)
+lines(density(mu.samples[,3]), col = 3)
+
+plot(sigsq.samples[,1], type = 'l', xlab = "iteration", ylab = quote(sigma^2), main = paste0("accept.rate = ", round(accept.rate[1], 3)))
+lines(sigsq.samples[,2], col = 2)
+lines(sigsq.samples[,3], col = 3)
+
+plot(density(sigsq.samples[,1]), type = 'l', xlab = quote(sigma^2), ylab = "posterior density",
+     main = paste0("delta = ", round(delta, 2)))
+lines(density(sigsq.samples[,2]), col = 2)
+lines(density(sigsq.samples[,3]), col = 3)
+
+#### Figure 4.8 예 4.2에서 자기상관 ####
+par(mfrow=c(1,2))
+acf(mu.samples[,1], main = quote(mu))
+acf(sigsq.samples[,1], main = quote(sigma^2))
+```
+
+```{r delta2}
+# 2. delta = 1.5
+nChains = 3
+nsim <- 20000; nburn <- 5000; delta <- 1.5
+p = 2
+mcmc.samples = array(0, dim=c(nsim, p, nChains))
+for(ich in 1:nChains){
+  initsList = inits.random(x)
+  mcmc.samples[,,ich] = Metropolis_normal_mu_sigsq(nsim, nburn, delta, dataList, initsList)
+}
+Metro.draws = mcmc(mcmc.samples[,,1])
+accept.rate = 1 - rejectionRate(Metro.draws); accept.rate
+
+mu.samples = mcmc.samples[,1,]
+sigsq.samples = mcmc.samples[,2,]
+
+#### Figure 4.7 예 4.3에서 경로그림과 사후밀도함수 ####
+par(mfrow = c(2,2))
+plot(mu.samples[,1], type = 'l', xlab = "iteration", ylab = quote(mu), main = paste0("accept.rate=", round(accept.rate[1],3)))
+lines(mu.samples[,2], col = 2)
+lines(mu.samples[,3], col = 3)
+
+plot(density(mu.samples[,1]), type = 'l', xlab = quote(mu), ylab = "posterior density", main = paste0("delta = ", round(delta, 2)))
+lines(density(mu.samples[,2]), col = 2)
+lines(density(mu.samples[,3]), col = 3)
+
+plot(sigsq.samples[,1], type = 'l', xlab = "iteration", ylab = quote(sigma^2), main = paste0("accept.rate = ", round(accept.rate[1], 3)))
+lines(sigsq.samples[,2], col = 2)
+lines(sigsq.samples[,3], col = 3)
+
+plot(density(sigsq.samples[,1]), type = 'l', xlab = quote(sigma^2), ylab = "posterior density",
+     main = paste0("delta = ", round(delta, 2)))
+lines(density(sigsq.samples[,2]), col = 2)
+lines(density(sigsq.samples[,3]), col = 3)
+
+#### Figure 4.8 예 4.2에서 자기상관 ####
+par(mfrow=c(1,2))
+acf(mu.samples[,1], main = quote(mu))
+acf(sigsq.samples[,1], main = quote(sigma^2))
+
+
+
+```
+
+# delta = 1.5 Thinning 후
+```{r thinning}
+###표본 추출 함수 thinning 추가
+Metropolis_normal_mu_sigsq=function(nsim,nburn,nthin, delta,dataList,initsList){
+  #initial values of mu and log.sigsq
+  mu=initsList$mu
+  log.sigsq=log(initsList$sigsq)
+  theta.curr=c(mu,log.sigsq)
+  p=length(theta.curr)
+  
+  #Start iterations
+  para.samples=matrix(0,nsim,p)
+  for (iter in 1:(nthin * nsim+nburn)){
+    z=rnorm(p,0,1)
+    theta.prop=z*delta+theta.curr
+    mu.curr=theta.curr[1]
+    sigsq.curr=exp(theta.curr[2])
+    mu.prop=theta.prop[1]
+    sigsq.prop=exp(theta.prop[2])
+    alpha=post.normal_mu_sigsq(c(mu.prop,sigsq.prop),dataList)/post.normal_mu_sigsq(c(mu.curr,sigsq.curr),dataList)*sigsq.prop/sigsq.curr
+    if(runif(1)<alpha) {theta.next<-theta.prop} else theta.next<-theta.curr
+    
+    theta.curr=theta.next
+    if(iter>nburn) {
+    if(iter %% nthin==0) {para.samples[(iter-nburn)/nthin,]=c(theta.next[1],exp(theta.next[2]))}
+    }
+  }
+  #end iterations
+  return(para.samples)
+}
+
+nChains = 3
+nsim <- 20000; nburn <- 5000; delta <- 1.5; nthin <- 10
+p = 2
+mcmc.samples = array(0, dim=c(nsim, p, nChains))
+for(ich in 1:nChains){
+  initsList = inits.random(x)
+  mcmc.samples[,,ich] = Metropolis_normal_mu_sigsq(nsim, nburn, nthin,  delta, dataList, initsList)
+}
+
+mu.samples = mcmc.samples[,1,]
+sigsq.samples = mcmc.samples[,2,]
+
+
+#### Figure 4.13 delta=1.5일때 nthin = 10에서 자기상관 ####
+par(mfrow=c(1,2))
+acf(mu.samples[,1], main = quote(mu))
+acf(sigsq.samples[,1], main = quote(sigma^2))
+```
+
+# Ch4 연습문제
+
+## 1) 4.2절의 알고리즘을 짧게 실행하여 theta의 대략적인 추정치와 분산을 추정
+```{r}
+#1)입력 및 준비단계 a) 데이터와 사전모수 입력
+mu0=10 ; sigsq0=25 ; a=0.5 ; b=1
+x<-c(10,13,15,11,9,18,20,17,23,21)
+dataList=list(x=x,mu0=mu0,sigsq0=sigsq0,a=a,b=b)
+
+#사후밀도함수의 커널을 계산. 메트로폴리스해스팅스에서 상수항은 약분되기 때문에 함수부분만 계산해도 됨
+
+#1)입력 및 준비단계 b) 사후밀도함수의 커널을 계산하는 함수 작성
+###compute posterior kernel for Metropolis
+post.normal_mu_sigsq=function(theta,dataList){
+  # retrieve data from dataList
+  x=dataList$x
+  mu=dataList$mu0
+  sigsq0=dataList$sigsq0
+  a=dataList$a
+  b=dataList$b
+  
+  mu=theta[1] ; sigsq=theta[2]
+  f=exp(-0.5*length(x)*log(sigsq)-0.5*sum((x-mu)^2)/sigsq-0.5*(mu-mu0)^2/sigsq0-(a+1)*log(sigsq)-b/sigsq)
+  return(f)
+}
+
+#2) MCMC 표본추출함수 작성
+###random walk metropolis algorithm
+Metropolis_normal_mu_sigsq=function(nsim,nburn,delta,dataList,initsList){
+  #initial values of mu and log.sigsq
+  mu=initsList$mu
+  log.sigsq=log(initsList$sigsq)
+  theta.curr=c(mu,log.sigsq)
+  p=length(theta.curr)
+  
+  #Start iterations
+  para.samples=matrix(0,nsim,p)
+  for (iter in 1:(nsim+nburn)){
+    z=rnorm(p,0,1)
+    theta.prop=z*delta+theta.curr
+    mu.curr=theta.curr[1]
+    sigsq.curr=exp(theta.curr[2])
+    mu.prop=theta.prop[1]
+    sigsq.prop=exp(theta.prop[2])
+    alpha=post.normal_mu_sigsq(c(mu.prop,sigsq.prop),dataList)/post.normal_mu_sigsq(c(mu.curr,sigsq.curr),dataList)*sigsq.prop/sigsq.curr
+    if(runif(1)<alpha) {theta.next<-theta.prop} else {theta.next<-theta.curr}
+    
+    theta.curr=theta.next
+    if(iter>nburn) para.samples[iter-nburn,]=c(theta.next[1],theta.next[2])
+
+  }
+  #end iterations
+  return(para.samples)
+}
+
+#3)다중체인 mcmc a)MCMC 준비단계 이후의 반복수, 다중체인의 수 선택
+nChains=3
+nsim=2000 ; nburn=0
+p=2 # num of para
+mcmc.samples=array(0,dim=c(nsim,p,nChains)) # array to save samples
+
+#3)다중체인 mcmc b) 랜덤워크의 표준편차 delta 선택
+#delta는 여러 가지 값 가능
+delta=1
+
+#3)다중체인 mcmc c) 초기치 선택
+##Generate random initial values
+inits.random=function(x){
+  resampledX=sample(x,replace=T)
+  muInit=mean(resampledX)
+  sigsqInit=var(resampledX)
+  return(list(mu=muInit,sigsq=sigsqInit))
+}
+
+##start iteration
+for (ich in 1:nChains){
+  initsList=inits.random(x)
+  mcmc.samples[,,ich]=Metropolis_normal_mu_sigsq(nsim,nburn,delta,dataList,initsList)
+}
+
+
+#### Posterior inference ####
+mcmc.samples.combined = rbind(mcmc.samples[,,1], mcmc.samples[,,2], mcmc.samples[,,3])
+para.hat = apply(mcmc.samples.combined, 2, mean)
+para.var = apply(mcmc.samples.combined, 2, var)
+
+tb <- data.frame(para.hat = para.hat, para.var = para.var)
+rownames(tb) <- c("mu", "log(sigma^2)")
+print(tb)
+```
+
+## 2) 추정된 분산에 2.4를 곱하여 랜덤워크의 분산 값으로 정한다.
+```{r}
+delta = para.var * 2.4
+```
+
+## 3) 4.2절의 알고리즘을 변형하여 위에서 구한 분산으로 후보표본을 추출하는 랜덤워크 메트로폴리스 알고리즘을 코딩한다.
+```{r}
+#### 보폭 theta의 원소마다 다른  random walk metropolis algorithm ####
+Metropolis_normal_mu_sigsq_adj=function(nsim,nburn,delta,dataList,initsList){
+  #initial values of mu and log.sigsq
+  mu=initsList$mu
+  log.sigsq=log(initsList$sigsq)
+  theta.curr=c(mu,log.sigsq)
+  p=length(theta.curr)
+  
+  #Start iterations
+  para.samples = matrix(0,nsim,p)
+  theta.prop = theta.curr * 0
+  for (iter in 1:(nsim+nburn)){
+    z=rnorm(p,0,1)
+    theta.prop[1]=z[1]*delta[1]+theta.curr[1]
+    theta.prop[2]=z[2]*delta[2]+theta.curr[2]
+    
+    mu.curr=theta.curr[1]
+    sigsq.curr=exp(theta.curr[2])
+    
+    mu.prop=theta.prop[1]
+    sigsq.prop=exp(theta.prop[2])
+    
+    alpha=post.normal_mu_sigsq(c(mu.prop,sigsq.prop),dataList)/post.normal_mu_sigsq(c(mu.curr,sigsq.curr),dataList)*sigsq.prop/sigsq.curr
+    if(runif(1)<alpha) {theta.next<-theta.prop} else {theta.next<-theta.curr}
+    
+    theta.curr=theta.next
+    if(iter>nburn) para.samples[iter-nburn,]=c(theta.next[1],exp(theta.next[2]))
+
+  }
+  #end iterations
+  return(para.samples)
+}
+
+```
+
+## 4) 랜덤워크 매트로폴리스를 짧게 수행한 후 경로그림과 후보표본의 채택확률을 계산하여 본다.
+```{r}
+nChains=3
+nsim=2000 ; nburn=0; p=2
+mcmc.samples=array(0,dim=c(nsim,p,nChains))
+delta= para.var * 2.4
+
+##start iteration
+for (ich in 1:nChains){
+  initsList=inits.random(x)
+  mcmc.samples[,,ich]=Metropolis_normal_mu_sigsq_adj(nsim,nburn,delta,dataList,initsList)
+}
+
+mu.samples=mcmc.samples[,1,]
+sigsq.samples=mcmc.samples[,2,]
+
+# 경로그림
+par(mfrow = c(1,2))
+plot(mu.samples[,1],type="l",xlab="iteration",ylab=quote(mu))
+lines(mu.samples[,2],col=2)
+lines(mu.samples[,3],col=3)
+
+plot(sigsq.samples[,1],type="l",xlab="iteration",ylab=quote(sigma^2))
+lines(sigsq.samples[,2],col=2)
+lines(sigsq.samples[,3],col=3)
+
+# 채택확률
+# Chain1
+Metro.draws = mcmc(mcmc.samples[,,1])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+# Chain2
+Metro.draws = mcmc(mcmc.samples[,,2])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+# Chain3
+Metro.draws = mcmc(mcmc.samples[,,3])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+```
+
+## 5) 채택확률이 대략 24%가 되도록 분산을 조정한다.
+```{r}
+nChains=3
+nsim=2000 ; nburn=0; p=2
+mcmc.samples=array(0,dim=c(nsim,p,nChains))
+delta= para.var * 2.4 + 0.025
+
+##start iteration
+for (ich in 1:nChains){
+  initsList=inits.random(x)
+  mcmc.samples[,,ich]=Metropolis_normal_mu_sigsq_adj(nsim,nburn,delta,dataList,initsList)
+}
+
+mu.samples=mcmc.samples[,1,]
+sigsq.samples=mcmc.samples[,2,]
+
+# 채택확률
+# Chain1
+Metro.draws = mcmc(mcmc.samples[,,1])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+# Chain2
+Metro.draws = mcmc(mcmc.samples[,,2])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+# Chain3
+Metro.draws = mcmc(mcmc.samples[,,3])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+delta_final <- delta
+```
+
+```{r, include=FALSE}
+Metropolis_normal_mu_sigsq=function(nsim,nburn,delta,dataList,initsList){
+  #initial values of mu and log.sigsq
+  mu=initsList$mu
+  log.sigsq=log(initsList$sigsq)
+  theta.curr=c(mu,log.sigsq)
+  p=length(theta.curr)
+  
+  #Start iterations
+  para.samples=matrix(0,nsim,p)
+  for (iter in 1:(nsim+nburn)){
+    z=rnorm(p,0,1)
+    theta.prop=z*delta+theta.curr
+    mu.curr=theta.curr[1]
+    sigsq.curr=exp(theta.curr[2])
+    mu.prop=theta.prop[1]
+    sigsq.prop=exp(theta.prop[2])
+    alpha=post.normal_mu_sigsq(c(mu.prop,sigsq.prop),dataList)/post.normal_mu_sigsq(c(mu.curr,sigsq.curr),dataList)*sigsq.prop/sigsq.curr
+    if(runif(1)<alpha) {theta.next<-theta.prop} else {theta.next<-theta.curr}
+    
+    theta.curr=theta.next
+    if(iter>nburn) para.samples[iter-nburn,]=c(theta.next[1],exp(theta.next[2]))
+
+  }
+  #end iterations
+  return(para.samples)
+}
+```
+
+## 6) 최종 선택된 분산을 사용하여 매트로폴리스를 충분히 길게 수행한 후 수렴속도, 효율, 사후추론 결과를 4.2절의 공통 분산을 사용하였을 경우와 비교하라.
+```{r}
+# 1) 공통분산
+nChains=3
+nsim=25000 ; nburn=0
+p=2 
+mcmc.samples=array(0,dim=c(nsim,p,nChains)) # array to save samples
+
+delta=1 ## 공통분산 사용
+
+
+##start iteration
+for (ich in 1:nChains){
+  initsList=inits.random(x)
+  mcmc.samples[,,ich]=Metropolis_normal_mu_sigsq(nsim,nburn,delta,dataList,initsList)
+}
+
+mu.samples=mcmc.samples[,1,]
+sigsq.samples=mcmc.samples[,2,]
+
+par(mfrow = c(2,2))
+plot(mu.samples[,1],type="l",xlab="iteration",ylab=quote(mu), main = "Same Delta")
+lines(mu.samples[,2],col=2)
+lines(mu.samples[,3],col=3)
+
+plot(density(mu.samples[,1]),xlab=quote(mu),ylab="posterior density",main="Same Delta")
+lines(density(mu.samples[,2]),col=2)
+lines(density(mu.samples[,3]),col=3)
+
+plot(sigsq.samples[,1],type="l",xlab="iteration",ylab=quote(sigma^2), main = "Same Delta")
+lines(sigsq.samples[,2],col=2)
+lines(sigsq.samples[,3],col=3)
+
+plot(density(sigsq.samples[,1]),xlab=quote(sigma^2),ylab="posterior density",main="Same Delta")
+lines(density(sigsq.samples[,2]),col=2)
+lines(density(sigsq.samples[,3]),col=3)
+
+#### Posterior inference ####
+mcmc.samples.combined = rbind(mcmc.samples[,,1], mcmc.samples[,,2], mcmc.samples[,,3])
+para.hat = apply(mcmc.samples.combined, 2, mean)
+HPD = apply(mcmc.samples.combined, 2, function(x) quantile(x, c(0.025, 0.975)))
+HPD
+#### mu와 sigma의 주변 사후밀도함수와 95% HPD 구간 ####
+par(mfrow = c(1,2))
+plot(density(mcmc.samples.combined[,1]), xlab = quote(mu), ylab = "", main = "Same Delta")
+abline(v = HPD[,1], lty = 2, col = 2)
+plot(density(mcmc.samples.combined[,2]), xlab = quote(sigma^2), ylab = "", main = "Same Delta")
+abline(v = HPD[,2], lty = 2, col = 2)
+
+Metro.draws = mcmc(mcmc.samples[,,1])
+accept.rate = 1 - rejectionRate(Metro.draws)
+accept.rate
+
+
+# 2) 각 theta 원소의 분산을 고려한 값.
+nChains=3
+nsim=25000 ; nburn=0; p=2 
+mcmc.samples=array(0,dim=c(nsim,p,nChains)) # array to save samples
+
+delta=delta_final ## 공통분산 사용
+
+
+##start iteration
+for (ich in 1:nChains){
+  initsList=inits.random(x)
+  mcmc.samples[,,ich]=Metropolis_normal_mu_sigsq_adj(nsim,nburn,delta,dataList,initsList)
+}
+
+mu.samples=mcmc.samples[,1,]
+sigsq.samples=mcmc.samples[,2,]
+
+par(mfrow = c(2,2))
+plot(mu.samples[,1],type="l",xlab="iteration",ylab=quote(mu), main = "Different Delta")
+lines(mu.samples[,2],col=2)
+lines(mu.samples[,3],col=3)
+
+plot(density(mu.samples[,1]),xlab=quote(mu),ylab="posterior density",main="Different Delta")
+lines(density(mu.samples[,2]),col=2)
+lines(density(mu.samples[,3]),col=3)
+
+plot(sigsq.samples[,1],type="l",xlab="iteration",ylab=quote(sigma^2), main = "Different Delta")
+lines(sigsq.samples[,2],col=2)
+lines(sigsq.samples[,3],col=3)
+
+plot(density(sigsq.samples[,1]),xlab=quote(sigma^2),ylab="posterior density",main="Different Delta")
+lines(density(sigsq.samples[,2]),col=2)
+lines(density(sigsq.samples[,3]),col=3)
+
+#### Posterior inference ####
+mcmc.samples.combined = rbind(mcmc.samples[,,1], mcmc.samples[,,2], mcmc.samples[,,3])
+para.hat = apply(mcmc.samples.combined, 2, mean)
+HPD = apply(mcmc.samples.combined, 2, function(x) quantile(x, c(0.025, 0.975)))
+HPD
+#### mu와 sigma의 주변 사후밀도함수와 95% HPD 구간 ####
+par(mfrow = c(1,2))
+plot(density(mcmc.samples.combined[,1]), xlab = quote(mu), ylab = "", main = "Different Delta")
+abline(v = HPD[,1], lty = 2, col = 2)
+plot(density(mcmc.samples.combined[,2]), xlab = quote(sigma^2), ylab = "", main = "Different Delta")
+abline(v = HPD[,2], lty = 2, col = 2)
+```
+
+공통 분산과 분산이 다른 경우 산 둘다 iteration 25,000와 burn-in 0으로 설정하였다. 경로그림비교해보면 모두 하나의 분포로 수렴하였다.
+
+공통 분산과  분산이 다른 경우 모두 mu의 경로그림에서 공통 분산보다 분산다른 경우 chain들이 더 잘 겹친다는 점을 제외하고 두개의 분산 모두 결과가 비슷하다.  
+
+공통 분산보다  분산이 다른 경우가 좀 더 채택확률이 0.234에 가깝기 때문에 일반적으로 수렴의 속도가 빠르고 사후밀도함수의 95% HPD 구간 좁을 것이지만 이 경우에는 mcmc를 충분히 길게 수행했기 때문인같다. 
